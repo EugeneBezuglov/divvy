@@ -12,11 +12,11 @@ These are parts of my final project on the road to getting the Google Data Analy
 
 I analyzed the data of a bike-sharing company, Cyclistic, which is a fictional name for [Divvy](https://divvybikes.com/about), a real Chicago-based bike-sharing company. I was given the 12 months of their ridership data and had to find how Divvy annual members use bikes differently from the casual riders.
 
-The analysis report is available in [PDF](https://github.com/EugeneBezuglov/divvy/blob/main/R/Divvy_markdown.pdf). Additional Tableau visualization are available [here](https://public.tableau.com/app/profile/eugene8546/viz/Story_Divvy/StoryDivvy).
+The analysis report is available in [PDF](https://github.com/EugeneBezuglov/divvy/blob/main/R/Divvy_markdown.pdf). Additional Tableau visualizations are available [here](https://public.tableau.com/app/profile/eugene8546/viz/Story_Divvy/StoryDivvy).
 
-The report covers my process of wrangling, cleaning, analysing, and visualizing data. Also, in the very last section I share recommendations for the stakeholders.
+The report covers my process of wrangling, cleaning, analyzing, and visualizing data. Also, in the very last section I share recommendations for the stakeholders.
 
-This report is also available on [Kaggle](https://www.kaggle.com/code/johncornish/divvy) as RMarkdown script. (However, the spatial analysis part isn't available on Kaggle due to Kaggle current limitations with Stamen Maps)
+This report is also available on [Kaggle](https://www.kaggle.com/code/johncornish/divvy) as a RMarkdown script. (However, the spatial analysis part isn't available on Kaggle due to Kaggle current limitations with Stamen Maps)
 
 # Data
 
