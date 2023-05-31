@@ -16,7 +16,7 @@ The analysis report is available in [PDF](https://github.com/EugeneBezuglov/divv
 
 The report covers my process of wrangling, cleaning, analyzing, and visualizing data. Also, in the very last section I share recommendations for the stakeholders.
 
-This report is also available on [Kaggle](https://www.kaggle.com/code/johncornish/divvy) as a RMarkdown script. (However, the spatial analysis part isn't available on Kaggle due to Kaggle current limitations with Stamen Maps)
+This report is also available on [Kaggle](https://www.kaggle.com/code/johncornish/divvy-cyclistic) as a RMarkdown script. (However, the spatial analysis part isn't available on Kaggle due to Kaggle's current limitations with Stamen Maps)
 
 # Data
 
