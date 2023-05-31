@@ -18,13 +18,20 @@ The report covers my process of wrangling, cleaning, analysing, and visualizing 
 
 This report is also available on [Kaggle](https://www.kaggle.com/code/johncornish/divvy) as RMarkdown script. (However, the spatial analysis part isn't available on Kaggle due to Kaggle current limitations with Stamen Maps)
 
+# Data
+
+The data for this project is a [public data set](https://divvy-tripdata.s3.amazonaws.com/index.html) provided by Divvy. It
+has been made available by Motivate International Inc. under this [license](https://ride.divvybikes.com/data-license-agreement).
+
+No riders’ personally identifiable information is provided.
+
 # Folders and files
 
 R code is in the "R" folder, SQL code is in the "SQL" folders. 
 
-Divvy_markdown.pdf is a final report file.
-DivvyBikes_v2_script.R is the script I used for this project. A huge part of the script has been already deleted, including filling NA values, because it wasn't relevant for the project. Yet, not all the code from the script went into the final report.
-SQL.sql hold all the SQL code for this project in the right order of execution. Separate queries are in separate files, too; they are self-evident so I won't describe them.
+* Divvy_markdown.pdf is a final report file.
+* DivvyBikes_v2_script.R is the script I used for this project. A huge part of the script has been already deleted, including filling NA values, because it wasn't relevant for the project. Yet, not all the code from the script went into the final report.
+* SQL.sql hold all the SQL code for this project in the right order of execution. Separate queries are in separate files, too; they are self-evident so I won't describe them.
 
 
 
