@@ -30,6 +30,7 @@ No riders’ personally identifiable information is provided.
 R code is in the "R" folder, SQL code is in the "SQL" folders. 
 
 * Divvy_markdown.pdf is a final report file.
+* Divvy_markdown.Rmd is a RMarkdown script.
 * DivvyBikes_v2_script.R is the script I used for this project. A huge part of the script has already been deleted, including filling NA values, because it wasn't relevant for the project. Yet, not all the code from the script went into the final report.
 * SQL.sql holds all the SQL code for this project in the right order of execution. Separate queries are in separate files, too; they are self-evident so I won't describe them.
 
