@@ -12,7 +12,7 @@ These are parts of my final project on the road to getting the Google Data Analy
 
 I analyzed the data of a bike-sharing company, Cyclistic, which is a fictional name for [Divvy](https://divvybikes.com/about), a real Chicago-based bike-sharing company. I was given the 12 months of their ridership data and had to find how Divvy annual members use bikes differently from the casual riders.
 
-The analysis report is available in [PDF](https://github.com/EugeneBezuglov/divvy/blob/main/R/Divvy_markdown.pdf). Additional Tableau visualization are available [here](https://public.tableau.com/app/profile/eugene8546/viz/Story_Divvy/StoryDivvy)
+The analysis report is available in [PDF](https://github.com/EugeneBezuglov/divvy/blob/main/R/Divvy_markdown.pdf). Additional Tableau visualization are available [here](https://public.tableau.com/app/profile/eugene8546/viz/Story_Divvy/StoryDivvy).
 
 The report covers my process of wrangling, cleaning, analysing, and visualizing data. Also, in the very last section I share recommendations for the stakeholders.
 
@@ -30,8 +30,8 @@ No riders’ personally identifiable information is provided.
 R code is in the "R" folder, SQL code is in the "SQL" folders. 
 
 * Divvy_markdown.pdf is a final report file.
-* DivvyBikes_v2_script.R is the script I used for this project. A huge part of the script has been already deleted, including filling NA values, because it wasn't relevant for the project. Yet, not all the code from the script went into the final report.
-* SQL.sql hold all the SQL code for this project in the right order of execution. Separate queries are in separate files, too; they are self-evident so I won't describe them.
+* DivvyBikes_v2_script.R is the script I used for this project. A huge part of the script has already been deleted, including filling NA values, because it wasn't relevant for the project. Yet, not all the code from the script went into the final report.
+* SQL.sql holds all the SQL code for this project in the right order of execution. Separate queries are in separate files, too; they are self-evident so I won't describe them.
 
 
 
