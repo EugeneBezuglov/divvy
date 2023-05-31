@@ -6,7 +6,7 @@ These are parts of my final project on the road to getting the Google Data Analy
 
 1. The entire project was initially done in R; however I chose to create a PostgreSQL 15 database on my PC and clean and wrangle data using SQL, too.
 
-2. The final report is composed as if I reported to the head of analytics — the report is long. If I were to report to stakeholders who prefer shorter reports, I would obviously create a shorter report.
+2. The [final report](https://github.com/EugeneBezuglov/divvy/blob/main/R/Divvy_markdown.pdf) is composed as if I reported to the head of analytics — the report is long. If I were to report to stakeholders who prefer shorter reports, I would obviously create a shorter report.
 
 # Review
 
