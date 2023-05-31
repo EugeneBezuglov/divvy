@@ -1,0 +1,1409 @@
+---
+title: "Divvy Customer Analysis"
+author: "Eugene Bezuglov"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    toc: yes
+    toc_depth: 2
+  html_document: default
+urlcolor: blue
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(janitor)
+library(tidyr)
+library(leaflet)
+library(ggmap)
+library(RColorBrewer)
+```
+
+# Introduction
+
+*W. Edwards Deming, a famous American scientist, once said: **Without data, you’re just another person with an opinion**. This project is my attempt to not become yet another person.*
+
+This is the R part of my final project on the road to getting the Google Data Analytics Professional Certificate. The Tableau part is available [here](https://public.tableau.com/app/profile/eugene8546/viz/Story_Divvy/StoryDivvy), the SQL part is available on [GitHub](https://github.com/EugeneBezuglov/divvy/blob/main/SQL/SQL.sql). This RMarkdown script is also available on [Kaggle](https://www.kaggle.com/code/johncornish/divvy).
+
+I'll be analyzing the data of a bike-sharing company, Cyclistic, which is a fictional name for [Divvy](https://divvybikes.com/about), a real Chicago-based bike-sharing company. So, from now on I'll refer to Cyclistic as Divvy.
+
+## Key Goals
+
+Divvy offers several pricing plans: single-ride passes, full-day passes, and annual memberships. Customers who purchase single-ride or full-day passes are referred to as casual riders. Customers who purchase annual memberships are Divvy members.
+
+Since annual members are much more profitable than casual users, the stakeholders believe their marketing campaign should be focused on converting casual riders into members. My key goal is to answer this question:
+
+**How do annual members and casual riders use Divvy bikes differently**? And to support my findings with a detailed report, which you're reading.
+
+## Data Description
+
+The data for this project is a public data set provided by Divvy, a Chicagoland’s bike share system. It has been made available by Motivate International Inc. under this [license](https://ride.divvybikes.com/data-license-agreement). No riders' personally identifiable information is provided.
+
+# Part 1: Data Wrangling and Cleaning
+
+For this project I downloaded 12 months of data. It comes from the internal sources and doesn't require extensive cleaning; however, some issues still exist, and in this section I address them, describing my step-by-step process of working with the data.
+
+## Uploading and Merging Data
+
+The data I was given comes in monthly csv files, so at first I upload it into separate tibbles:
+```{r upload csv into tibbles, message=FALSE}
+# Import CSV into tibbles
+feb2022 <- read_csv("./data/202202-divvy-tripdata.csv")
+mar2022 <- read_csv("./data/202203-divvy-tripdata.csv")
+apr2022 <- read_csv("./data/202204-divvy-tripdata.csv")
+may2022 <- read_csv("./data/202205-divvy-tripdata.csv")
+jun2022 <- read_csv("./data/202206-divvy-tripdata.csv")
+jul2022 <- read_csv("./data/202207-divvy-tripdata.csv")
+aug2022 <- read_csv("./data/202208-divvy-tripdata.csv")
+sep2022 <- read_csv("./data/202209-divvy-publictripdata.csv")
+oct2022 <- read_csv("./data/202210-divvy-tripdata.csv")
+nov2022 <- read_csv("./data/202211-divvy-tripdata.csv")
+dec2022 <- read_csv("./data/202212-divvy-tripdata.csv")
+jan2023 <- read_csv("./data/202301-divvy-tripdata.csv")
+```
+
+You might have a look at one of the tibbles to see how the data is organized:
+
+```{r}
+glimpse(feb2022)
+```
+
+The variables are self-explanatory so I won't elaborate on that topic.
+
+Next, I check if the new tibbles are row-bindable. If tibbles have different number of columns, **rbind()** throws an error, whereas **bind_rows()** assigns NA's. Hence, using **rbind** bind method. Returns TRUE if the columns are identical.
+
+```{r compare columns}
+compare_df_cols_same(feb2022, mar2022, apr2022, may2022, jun2022, jul2022,
+                     aug2022,sep2022, oct2022, nov2022, dec2022, jan2023,
+                     bind_method = c("rbind"))
+```
+
+Next, I combine single tibbles into one tibble. This time I use bind_rows because it's faster.
+
+```{r combine tibbles}
+full_tripdata <- bind_rows(feb2022, mar2022, apr2022, may2022, jun2022, jul2022,
+                           aug2022, sep2022, oct2022, nov2022, dec2022, jan2023)
+```
+
+And remove single tibbles.
+
+```{r remove single tibbles}
+rm(feb2022, mar2022, apr2022, may2022, jun2022, jul2022,
+          aug2022, sep2022, oct2022, nov2022, dec2022, jan2023)
+```
+
+## Handling Duplicated, Missing, and Irrelevant Values
+
+In the new *full_tripdata tibble*, ride_id variable is the primary key, so I verify it contains no duplicates.
+
+```{r check ride_id duplicates}
+get_dupes(full_tripdata, ride_id)
+```
+
+After introducing electric bikes, Divvy Bikes renamed docked_bike to classic_bike in their database. Therefore, I replace docked_bike to classic_bike in the rideable_type observations.
+
+```{r rename observations}
+full_tripdata <- full_tripdata %>% 
+  mutate(rideable_type = if_else(rideable_type == "docked_bike", "classic_bike", rideable_type))
+```
+
+And verify the replacement was successful.
+
+```{r verify renaming observation}
+table(full_tripdata$rideable_type)
+```
+
+Next, I check if any observations are missing.
+```{r look for NAs in the data}
+sapply(full_tripdata, function(x) sum(is.na(x)))
+```
+Some coordinates are missing, as well as ids and names of stations. Can the missing values be found based on the data we have? For example, it's intuitive that we could fill in the missing *start_station_name* and *start_station_id* based on the combination of matching *start_lat* and *start_lng* from another row. However, the answer is **no**. Turns out that all of the observations with missing station names and ids have their lat and lng written in the 2 decimal places precision, whereas at least 5 decimal places precision is required to locate the station correctly.
+
+Here's the code to show it:
+
+*(nchar = 8 is for fetching coordinates in xx.xxxxx format, which is 8 characters)*
+
+```{r verify rows with NAs has broken coordinates}
+full_tripdata %>%
+  filter(is.na(start_station_name),
+         is.na(start_station_id),
+         nchar(as.character(start_lat)) == 8)
+```
+
+Yet, I choose not to remove the rows with NAs for station names and ID's because we can still get some insights from such rows. Moreover, removing such rows galore could lower the reliability of the data.
+
+Aside from NA's one more issue exists — there are more station names than station ID's:
+
+```{r count station names and IDs}
+full_tripdata %>% 
+  summarise (
+    start_id = start_station_id %>% n_distinct,
+    end_id = end_station_id %>% n_distinct,
+    start_name = start_station_name %>% n_distinct,
+    end_name = end_station_name %>% n_distinct
+)
+```
+
+I create separate tibbles with duplicate naming for start stations and end stations, and then manually explore them:
+
+```{r tibble for duplicate start_station_name}
+full_tripdata %>% 
+  group_by(start_station_id) %>% 
+  filter(n_distinct(start_station_name) > 1) %>% 
+  select(start_station_id, start_station_name) %>% 
+  distinct() %>% 
+  arrange(desc(start_station_id))
+```
+
+```{r tibble for duplicate end_station_name}
+full_tripdata %>% 
+  group_by(end_station_id) %>% 
+  filter(n_distinct(end_station_name) > 1) %>% 
+  select(end_station_id, end_station_name) %>% 
+  distinct() %>% 
+  arrange(desc(end_station_id))
+```
+
+There are over 700 non-unique names. After manually exploring them, I found several patterns:
+
+- Stations with the same ID sometimes have their name started with "Public Rack - " or "City Rack - ",and sometimes not. I explored System Map on DivvyBikes website and figured out that these must be the same stations.
+- Some stations have " (Temp)" added to their name. Looks like DivvyBikes added temporary stations for whatever reason, yet for the purpose of the current analysis it's safe to merge such stations into one.
+- "DIVVY 001 - Warehouse test station" and "Hubbard Bike-checking (LBS-WH-TEST)" are maintenance stations, I remove them.
+- Two stations have "amp;" string piece attached after the ampersand sign, I remove it.
+- Three stations have the vaccination site tag added to their name. I believe these were temporary stations during the covid vaccination campaign, and for the purpose of this analysis it's safe to remove this tag and merge two separate stations into one.
+- One station has a duplicate with "- Charging" tag attached, I remove it.
+- One station had "*" after its name, I remove it.
+
+Fixing these issues:
+
+```{r remove and mutate strings}
+full_tripdata <- full_tripdata %>% 
+  mutate(start_station_name = str_remove(start_station_name, "Public Rack - ")) %>%
+  mutate(start_station_name = str_remove(start_station_name, "Public  Rack - ")) %>% 
+  mutate(start_station_name = str_remove(start_station_name, "Pubic Rack - ")) %>%
+  mutate(start_station_name = str_remove(start_station_name, "City Rack - ")) %>% 
+  mutate(start_station_name = str_remove(start_station_name, "amp;")) %>% 
+  mutate(start_station_name = str_trim(str_remove(start_station_name, " \\(Temp\\)"))) %>% 
+  mutate(start_station_name = str_remove(start_station_name, "\\*")) %>% 
+  mutate(start_station_name = str_remove(start_station_name, " - Charging")) %>% 
+  mutate(start_station_name = str_remove(start_station_name, " (May)")) %>%
+  mutate(start_station_name = str_replace(start_station_name, "Western & 28th - Velasquez Institute Vaccination Site", "Western Ave & 28th St")) %>% 
+  mutate(start_station_name = str_replace(start_station_name, "Halsted & 63rd - Kennedy-King Vaccination Site", "Halsted St & 63rd St")) %>% 
+  mutate(start_station_name = str_replace(start_station_name, "Broadway & Wilson - Truman College Vaccination Site", "Broadway & Wilson Ave")) %>% 
+  filter(start_station_id != "DIVVY 001 - Warehouse test station" &
+           start_station_id != "Hubbard Bike-checking (LBS-WH-TEST)" |
+           is.na(start_station_id)) %>% 
+  mutate(end_station_name = str_remove(end_station_name, "Public Rack - ")) %>% 
+  mutate(end_station_name = str_remove(end_station_name, "Public  Rack - ")) %>% 
+  mutate(end_station_name = str_remove(end_station_name, "Pubic Rack - ")) %>% 
+  mutate(end_station_name = str_remove(end_station_name, "City Rack - ")) %>% 
+  mutate(end_station_name = str_remove(end_station_name, "amp;")) %>% 
+  mutate(end_station_name = str_trim(str_remove(end_station_name, " \\(Temp\\)"))) %>% 
+  mutate(end_station_name = str_remove(end_station_name, "\\*")) %>% 
+  mutate(end_station_name = str_remove(end_station_name, " - Charging")) %>% 
+  mutate(end_station_name = str_remove(end_station_name, " (May)")) %>% 
+  mutate(end_station_name = str_replace(end_station_name, "Western & 28th - Velasquez Institute Vaccination Site", "Western Ave & 28th St")) %>% 
+  mutate(end_station_name = str_replace(end_station_name, "Halsted & 63rd - Kennedy-King Vaccination Site", "Halsted St & 63rd St")) %>% 
+  mutate(end_station_name = str_replace(end_station_name, "Broadway & Wilson - Truman College Vaccination Site", "Broadway & Wilson Ave")) %>% 
+  filter(end_station_id != "DIVVY 001 - Warehouse test station" &
+           end_station_id != "Hubbard Bike-checking (LBS-WH-TEST)" |
+           is.na(end_station_id))
+```
+
+Now I check for the duplicate station names once more:
+
+```{r recheck duplicate start_station_name}
+full_tripdata %>% 
+  group_by(start_station_id) %>% 
+  filter(n_distinct(start_station_name) > 1) %>% 
+  select(start_station_id, start_station_name) %>% 
+  distinct() %>% 
+  arrange(desc(start_station_id))
+```
+
+```{r recheck duplicate end_station_name}
+full_tripdata %>% 
+  group_by(end_station_id) %>% 
+  filter(n_distinct(end_station_name) > 1) %>% 
+  select(end_station_id, end_station_name) %>% 
+  distinct() %>% 
+  arrange(desc(end_station_id))
+```
+
+
+The number of non-unique station names dropped from over 700 to slightly over 200. Now, the majority of such stations are nearby stations with the same ID but different names, such as *"Woodlawn Ave & 63rd St N"* and *"Woodlawn Ave & 63rd St - NE"*.
+
+Some stations still have the same ID but completely different names. I could dive further into fixing this problem by using station coordinates together with DivvyBikes System Map, but it is irrelevant to the purpose of the current project. Moreover, if I worked for DivvyBikes I would have access to more data to fix this problem without making any guesses. So here I leave it as is.
+
+Let's have a look at the count of distinct station names and IDs once again:
+
+```{r count station names and IDs (second time)}
+full_tripdata %>% 
+  summarise (
+    start_id = start_station_id %>% n_distinct,
+    end_id = end_station_id %>% n_distinct,
+    start_name = start_station_name %>% n_distinct,
+    end_name = end_station_name %>% n_distinct
+)
+```
+
+There are more distinct IDs and names for end stations. Let's have a closer look by filtering end station names that are not in start station names:
+
+```{r Distinct end_station_name that is not in start_station_name}
+full_tripdata %>% 
+  filter(!is.na(end_station_name) 
+         & !(full_tripdata$end_station_name %in% full_tripdata$start_station_name)
+         ) %>%
+  distinct(end_station_name)
+```
+
+Station names look perfectly fine; maybe these are just unpopular. Anyway, let's explore this situation in all possible projections:
+
+```{r Distinct start_station_name that is not in end_station_name}
+# Distinct start_station_name that is not in end_station_name
+full_tripdata %>% 
+  filter(!is.na(start_station_name) 
+         & !(full_tripdata$start_station_name %in% full_tripdata$end_station_name)
+  ) %>%
+  distinct(start_station_name)
+```
+
+```{r Distinct start_station_id that is not in end_station_id}
+# Distinct start_station_id that is not in end_station_id
+full_tripdata %>% 
+  filter(!is.na(start_station_id) 
+         & !(full_tripdata$start_station_id %in% full_tripdata$end_station_id)
+  ) %>%
+  distinct(start_station_id)
+```
+
+```{r Distinct end_station_id that is not in start_station_id}
+# Distinct end_station_id that is not in start_station_id
+full_tripdata %>% 
+  filter(!is.na(end_station_id) 
+         & !(full_tripdata$end_station_id %in% full_tripdata$start_station_id)
+  ) %>%
+  distinct(end_station_id)
+```
+
+All names and IDs look fine, aside from "DIVVY CASSETTE REPAIR MOBILE STATION" ID, which must belong to a maintenance station. It's better to remove it from the data.
+
+```{r remove last maintenance station}
+full_tripdata <- full_tripdata %>% 
+  filter(end_station_id != "DIVVY CASSETTE REPAIR MOBILE STATION"
+         | is.na(end_station_id)
+         )
+
+full_tripdata <- full_tripdata %>% 
+  filter(start_station_id != "DIVVY CASSETTE REPAIR MOBILE STATION"
+         | is.na(start_station_id)
+         )
+```
+
+Finally, the data looks clean enough. It's time to add new variables for the future analysis.
+
+## Adding New Variables
+
+I add new columns for *date*, *year*, *month*, *week*, *day of week*, and *hour* of when each ride started.
+
+```{r add multiple variables}
+full_tripdata$date <- as.Date(full_tripdata$started_at)
+full_tripdata$year <- format(as.Date(full_tripdata$started_at), "%Y")
+full_tripdata$month <- format(as.Date(full_tripdata$started_at), "%m")
+full_tripdata$week <- week(as.POSIXct(full_tripdata$started_at))
+full_tripdata$day_of_week <- format(as.Date(full_tripdata$date), "%A")
+full_tripdata$hour <- hour(as.POSIXct(full_tripdata$started_at))
+```
+
+I also add a variable that takes the value 1 is the trip is round, and 0 in all the other cases.
+
+```{r add round_trip}
+full_tripdata$round_trip <- ifelse((full_tripdata$start_station_id == full_tripdata$end_station_id), 1, 0)
+```
+
+Finally, I add a variable for ride duration in seconds.
+
+```{r add ride_length}
+full_tripdata$ride_length <- as.numeric(difftime(full_tripdata$ended_at,full_tripdata$started_at), units="secs")
+```
+
+After introducing new variables, I examine a brief statistical summary of the data to get a better understanding of it:
+
+```{r brief statistical summary}
+summary(full_tripdata)
+```
+
+Clearly, there are some outliers in the data that require attention.
+
+## Removing Outliers
+
+The first issue is that ride_length obviously can't be negative or zero, yet some observations are.
+
+```{r explore count of negative ride_length}
+sum(full_tripdata$ride_length <= 0)
+```
+
+This might be due to time miscalibration across stations or bikes, depending on how this process is organized. Can't solve this issue without additional data, so I exclude rides with negative or zero duration.
+
+```{r remove negative ride_length}
+full_tripdata <- full_tripdata[!(full_tripdata$ride_length <= 0),]
+```
+
+The second issue is a remarkably long max ride_length (in a scale of weeks).
+
+Even if it's indeed true that some bike enthusiasts rent bikes for extremely long stretches of time, for the purpose of this analysis it's reasonable to remove such outliers.
+
+Moreover, one-second or ten-second rides don't make much sense either. Whether they stem from customers changing their minds, errors in clock calibration, or Lance Armstrong renting bikes, is unsolvable without additional information.
+
+Hence, data trimming. First, I examine the deciles. (Mainly to show my potential employers I'm familiar with basic statistics)
+
+```{r deciles}
+quantile(full_tripdata$ride_length, probs = seq(0,1,0.1))
+```
+
+From the deciles it seems there's some right skew in the curve. It's better to visualize it anyway:
+
+```{r ride length distribution plot, message=FALSE, warning=FALSE}
+ggplot(full_tripdata, aes(x = ride_length, fill = member_casual)) + 
+  geom_histogram(binwidth = 1, position = "stack") +
+  scale_y_continuous(labels = comma) +
+  xlim(0,3600)
+```
+
+The distribution also has outliers close to a zero point. As I mentioned before, this problem is unsolvable without additional data, so I need to remove them.
+
+The distribution is asymmetrical, so I can't use the Empirical Rule (aka the 68-95-99.7 rule).
+
+Instead, I'll use the interquartile range (IQR) with 3.0 coefficient to remove extreme outliers on the right, and my common sense to remove the outliers on the left.
+
+So, my common sense tells me it's appropriate to remove all the outliers that fall to the left of the lowest point at the inward curve in the first decile.
+
+After experimenting with xlim() values, I can see that the lowest point is located somewhere in the ride_length < 100 range. Precisely, the lowest point has the minimum count(ride_length) where ride_length is less than 100.
+
+```{r determine left outliers}
+full_tripdata %>% 
+  filter(ride_length < 100) %>% 
+  count(ride_length) %>% 
+  arrange(n) %>% 
+  print(n = 1)
+```
+
+The cut-off point on the left is 65, so I remove the corresponding rides.
+
+```{r remove left outliers}
+full_tripdata <- full_tripdata[!(full_tripdata$ride_length < 65),]
+```
+
+Now, as I've just mentioned, I use IQR with 3.0 coefficient to determine the cut-off point for the outliers on the right. To get the value, I add 3 x IQR to the third quartile.
+
+```{r determine right outliers}
+quantile(full_tripdata$ride_length, probs = 0.75) + 3*IQR(full_tripdata$ride_length)
+```
+
+Removing the outliers on the right:
+
+```{r remove right outliers}
+full_tripdata <- full_tripdata[!(full_tripdata$ride_length > 3386),]
+```
+
+I check the distribution once again to verify it looks more reliable for the current analysis goal.
+
+```{r verify the distribution is ready for analysis}
+ggplot(full_tripdata, aes(x = ride_length, fill = member_casual)) + 
+  geom_histogram(binwidth = 1, position = "stack") +
+  scale_y_continuous(labels = comma)
+```
+
+# Part 2: Data Analysis and Visualization
+
+A reminder: the purpose of this entire analysis is to find insights on how **casual** Divvy customers differ from annual **members**.
+
+## General View
+
+For starters, let's have the most general view on the data:
+
+```{r Ride Ratio by Customer Type, message=FALSE, warning=FALSE}
+pie_percent_rides <- full_tripdata %>% 
+  count(member_casual) %>% 
+  rename(group = member_casual) %>% 
+  rename(value = n) %>% 
+  arrange(desc(group)) %>%
+  mutate(prop = value / sum(value) *100)
+
+ggplot(pie_percent_rides, aes(x="", y=value, fill=group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  geom_text(aes(label = paste0(round(prop, 2), "%\n", comma(value), " rides\n", group)),
+            position = position_stack(vjust = 0.5),
+            color = "white", size=6, lineheight=0.8) +
+  labs(title = "Ride Ratio by Customer Type") +
+  guides(fill = guide_legend(title = "Customer Type"))
+```
+
+```{r Total Ride Duration Ratio by Customer Type, message=FALSE, warning=FALSE}
+pie_ride_length_ratio <- full_tripdata %>% 
+  group_by(member_casual) %>% 
+  summarise(total_duration = sum(ride_length) / 3600) %>% 
+  mutate(prop = total_duration / sum(total_duration) * 100)
+
+ggplot(pie_ride_length_ratio, aes(x="", y=total_duration, fill=member_casual)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() + 
+  theme(legend.position="none") +
+  geom_text(aes(label = paste0(round(prop, 1), "%\n", comma(round(total_duration,0)),
+                               " hours\n", member_casual)),
+                position = position_stack(vjust = 0.5),
+                color = "white", size=6, lineheight=0.8) +
+  labs(title = "Total Ride Duration Ratio by Customer Type") +
+  guides(fill = guide_legend(title = "Customer Type"))
+```
+
+This doesn't give us much insight but helps appreciate the sheer amount of data — over five million rides and over a million hours. Also, it's already evident from these pie charts that casual riders have longer mean ride time.
+
+Let's look at the precise numbers.
+
+## Mean Numbers
+
+First, let's check general mean ride length:
+
+```{r Mean Ride Length, message=FALSE, warning=FALSE}
+bar_mean_length <- full_tripdata %>% 
+  group_by(member_casual) %>% 
+  summarise(mean_length = mean(ride_length) / 60)
+
+ggplot(bar_mean_length, aes(x = member_casual, y = mean_length, fill = member_casual)) +
+  theme_minimal() +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = comma(mean_length)), vjust = -0.5) +
+  scale_y_continuous(labels = NULL, expand = expansion(mult = c(0, 0.05))) +
+  theme(legend.position = "none") +
+  labs(
+    title = "Mean Ride Length (minutes)",
+    x = "",
+    y = "",
+    fill = "Customer Type"
+  )
+```
+
+Now, let's check mean ride length distribution across the days of week:
+
+```{r Mean Ride Length by Day of Week, message=FALSE, warning=FALSE}
+bar_mean_length_per_week <- full_tripdata %>% 
+  group_by(day_of_week, member_casual) %>% 
+  summarise(mean_length = mean(ride_length) / 60) %>% 
+  mutate(day_of_week = factor(day_of_week, levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))) %>%
+  arrange(day_of_week)  
+
+ggplot(bar_mean_length_per_week, aes(x=day_of_week, y=mean_length, fill=member_casual)) +
+  theme_minimal() +
+  geom_bar(stat="identity", position = "dodge") +
+  geom_text(aes(label = round(mean_length,1)), position = position_dodge(width = 0.9), vjust = -0.5) +
+  scale_y_continuous(labels = comma) +
+  theme(legend.position="bottom") +
+  labs(title = "Mean Ride Length by Day of Week by Customer Type (minutes)",
+       x = "",
+       y = "",
+       fill = "Customer Type")
+
+```
+
+Evidently, mean ride lengths are higher on weekends for both groups. However, **members** tend to have a more even distribution of mean ride lengths across weekdays than **casual** customers.
+
+Might it be because members use bikes mainly to commute, while casuals use it for a wider variety of reasons? Anyway, let's see how mean ride lengths are distributed across the hours when the rides started:
+
+```{r Mean Trip Length distribution by Start Hour, message=FALSE, warning=FALSE}
+line_ride_length_hour <- full_tripdata %>% 
+  group_by(hour, member_casual) %>% 
+  summarise(mean_ride_length = mean(ride_length) / 60) %>% 
+  arrange(hour)
+
+ggplot(line_ride_length_hour, aes(x = hour, y = mean_ride_length, color = member_casual)) + 
+  geom_line() +
+  scale_x_continuous(breaks = unique(line_ride_length_hour$hour)) + 
+  scale_y_continuous(expand = c(0, 0), 
+                     limits = c(0, max(line_ride_length_hour$mean_ride_length))) +  
+  theme_minimal() +
+  labs(title = "Mean Trip Length distribution by Start Hour (minutes)",
+       color = "Customer Type",
+       x = element_blank(),
+       y = element_blank()) +
+  theme(legend.position = "bottom")
+```
+
+The two graphs follow the somewhat similar pattern, however, the spread of values for casuals is significantly larger.
+
+Why is the spread? Is it due to members being more efficient with riding a bicycle, so they need less time than casuals to travel equal distance during busy hours?
+
+This hypothesis is worth testing; however, the current database doesn't have the data on distance. I can make some assumptions based on start station and end station coordinates, but such assumptions won't be accurate. Also, this hypothesis can be tested based on stats for distinct customers, but there's no such data available.
+
+To finish with mean values, here's mean ride length per month:
+
+```{r Mean Ride Length per Month, message=FALSE, warning=FALSE}
+area_mean_ride_month <- full_tripdata %>% 
+  group_by(month = floor_date(date, unit = "month"), member_casual) %>% 
+  summarise(mean_length = mean(ride_length) / 60) %>% 
+  arrange(month)
+
+ggplot(area_mean_ride_month, aes(x = month, y = mean_length, fill = member_casual)) +
+  geom_area(position = "identity") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()) +
+  scale_x_date(date_breaks = "2 month", date_labels = "%b %Y") +
+  scale_y_continuous(breaks = seq(0, max(area_mean_ride_month$mean_length), 2)) +
+  labs(title = "Mean Ride Length per Month (minutes)",
+       fill = "Customer Type")
+```
+
+Clearly, the warmer the weather, the longer the rides. Also, it's evident that in December and January the difference in mean ride length between customer groups is minimal.
+
+*Is it because in cold weather all customers mainly use bikes to just commute, whereas in good weather they slow down to enjoy the ride? Then why do casuals slow down more?*
+
+*Or, is it because warm weather attracts more less-skilled riders, making the gap in mean ride length between groups grow?*
+
+*Or, is it because in warm weather customers travel longer distances and also members are more experienced riders, so the gap tends to grow wider with the more distance traveled?*
+
+My common sense tells me all of the factors above take place, but these are too many hypotheses to test with so limited data. Anyway, the fact is that for some reason in warmer months **casual** riders tend to have proportionally longer rides than **members**, and in colder months this gap is much smaller.
+
+Mean numbers are informative, but what if such a gap is due to the sample size? What if only a tiny fraction of customers that use bikes in winter are casual riders?
+
+To answer that, I need to analyse ridership from various angles.
+
+## Ridership Analysis
+
+Let's start with a daily ridership distribution:
+
+```{r Number of Rides per Day, message=FALSE, warning=FALSE}
+area_ride_count_date <- full_tripdata %>% 
+  group_by(date,member_casual) %>% 
+  summarise(ride_count = n()) %>% 
+  arrange(date)
+
+ggplot(area_ride_count_date, aes(x = date, y = ride_count, fill = member_casual)) +
+  geom_area() +
+  theme_minimal() +
+  theme(legend.position="bottom",
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()) +
+  scale_x_date(breaks = "2 month", labels = date_format("%b %Y")) +
+  labs(title = "Number of Rides per Day",
+       fill = "Customer Type")
+```
+
+Truly a terrifyingly looking plot. To improve readability, I aggregate it by month:
+
+```{r Number of Rides per Month (stacked), message=FALSE, warning=FALSE}
+rides_month <- full_tripdata %>% 
+  group_by(month, member_casual, year) %>% 
+  summarise(rides_count = n()) %>% 
+  arrange(year)
+
+ggplot(rides_month, aes(x = month, y = rides_count, fill = member_casual)) +
+  geom_col(position = "stack") +
+  theme_minimal() +
+  scale_y_continuous(labels = comma) +
+  scale_x_discrete(limits = rides_month$month,
+                   label = paste0(month.abb[as.integer(rides_month$month)],", ",
+                                  rides_month$year)) +
+  labs(title = "Number of Rides per Month (stacked)",
+       x = "",
+       y = "",
+       fill = "Customer Type") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+From this stacked area chart it's clear that in December, January, and February casual riders are indeed significantly less present in the ridership proportion.
+
+For a more precise proportion, I build a filled column chart:
+
+```{r Proportion of Rides per Month, message=FALSE, warning=FALSE}
+col_ride_count_month <- full_tripdata %>% 
+  group_by(month = floor_date(date, unit = "month"), member_casual) %>% 
+  summarise(ride_count = n()) %>% 
+  arrange(month) %>%
+  group_by(month) %>%
+  mutate(ride_count_prop = ride_count / sum(ride_count))
+
+ggplot(col_ride_count_month, aes(x = month, y = ride_count_prop, fill = member_casual)) +
+  geom_col(position = "fill") +
+  geom_text(aes(label = paste0(round(ride_count_prop * 100), "%")), 
+            position = position_fill(vjust = 0.5), size = 3) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank()) +  # Remove Y-axis title and text
+  scale_x_date(date_labels = "%b %Y", date_breaks = "2 month") +
+  labs(title = "Proportion of Rides per Month",
+       fill = "Customer Type")
+```
+
+In December, January, and February only roughly 1 out of each 5 rides is by casual riders. Adding the previous mean ride length analysis to this, I reckon that during these months casual riders mostly use bikes for the same purpose, as members.
+
+Hence, to turn such casuals into members, they should be marketed accordingly. Why don't they buy the annual membership subscription?
+
+- *If they don't see enough value for their dollar*, Divvy could send them infographics, showing how much they personally could benefit from buying annual membership.
+- *If they don't ride bikes too often*, they could be lured into riding more often by providing personal discounts (maybe during certain hours and so on), and after they adapt to riding often enough so the annual subscription is worth buying, send them infographics from the previous paragraph.
+
+The last insight seems good, but it's not enough. For more food for thought I need to look at the ridership numbers.
+
+Here's the bar plot showing the number of rides grouped by day of week:
+
+```{r Ridership by Day of Week, message=FALSE, warning=FALSE}
+bar_trips_count_week_per_membership <- full_tripdata %>% 
+  group_by(day_of_week, member_casual) %>% 
+  summarise(trips = sum(!is.na(ride_id))) %>% 
+  mutate(day_of_week = factor(day_of_week,
+                              levels = c("Monday", "Tuesday", "Wednesday",
+                                         "Thursday", "Friday", "Saturday",
+                                         "Sunday"))) %>%
+  arrange(day_of_week)
+
+ggplot(bar_trips_count_week_per_membership, aes(x=day_of_week, y=trips, fill=member_casual)) +
+  theme_minimal() +
+  geom_bar(stat="identity", position = "dodge") +
+  scale_y_continuous(labels = comma) +
+  theme(legend.position="bottom") +
+  labs(title = "Ridership by Day of Week",
+       x = "",
+       y = "",
+       fill = "Customer Type")
+```
+
+The bar shows evident differences — **casual** ridership grows on weekends, whereas **member** ridership drops.
+
+It's intuitive that on weekends people commute less and ride for fun more. From *Mean Ride Length by Day of Week* plot I already know that mean ride length grows on weekends for the both groups.
+
+Now, I assume that if on weekends customers ride for fun more, it should result in a higher number of round trips.
+
+```{r Number of Round Trips by Day of Week, message=FALSE, warning=FALSE}
+bar_round_trips_dow <- full_tripdata %>% 
+  group_by(day_of_week, member_casual) %>% 
+  summarise(num_round_trip = sum(round_trip, na.rm = TRUE)) %>% 
+  mutate(day_of_week = factor(day_of_week,
+                              levels = c("Monday", "Tuesday", "Wednesday",
+                                         "Thursday", "Friday", "Saturday",
+                                         "Sunday"))) %>%
+  arrange(day_of_week)  
+
+
+ggplot(bar_round_trips_dow, aes(x = day_of_week, y = num_round_trip, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  scale_y_continuous(labels = comma) +
+  labs(title = "Number of Round Trips by Day of Week",
+       fill = "Customer Type",
+       x = element_blank(),
+       y = element_blank()) +
+  theme(legend.position = "bottom")
+```
+
+The number of round trips is higher on weekends, which proves my hypothesis of the growing number of recreational rides on Saturday and Sunday. Or, does it?
+
+For **members**, yes, because overall member ridership drops on weekends, yet the number of round trips grows. But what about **casuals**, whose overall ridership also grows on weekends?
+
+To answer this, I'm building a *Ratio of Round Trips by Day of Week* graph, which shows what percentage of total rides for each day are round.
+
+```{r Percentage of Round Trips by Day of Week, message=FALSE, warning=FALSE}
+round_trips_dow <- full_tripdata %>% 
+  group_by(day_of_week, member_casual) %>% 
+  summarise(num_round_trip = sum(round_trip, na.rm = TRUE), total_trips = n(),
+            ratio = round((num_round_trip / total_trips)*100,2)) %>% 
+  mutate(day_of_week = factor(day_of_week,
+                              levels = c("Monday", "Tuesday", "Wednesday",
+                                         "Thursday", "Friday", "Saturday",
+                                         "Sunday"))) %>%
+  arrange(day_of_week) 
+
+ggplot(round_trips_dow, aes(x = day_of_week, y = ratio, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = paste0(round(ratio, 1), "%")),
+            position = position_dodge(width = 0.9), vjust = -0.5) +
+  theme_minimal() +
+  scale_y_continuous(labels = NULL) +
+  labs(title = "Percentage of Round Trips by Day of Week",
+       fill = "Customer Type",
+       x = element_blank(),
+       y = element_blank()) +
+  theme(legend.position = "bottom")
+```
+
+Now it's evident that the number of round trips grows on weekends for both groups. For some reason, it also grows on Mondays. Why is that? Do people in Chicago typically have Monday as a weekend? Or do they enjoy their round trips on Saturday and Sunday, so they decide to have more on Monday? These are questions for further investigation, but are out of the scope of this analysis.
+
+However, I have one more insight — **casual** riders make more round trips, than **members**. Moreover, it's interesting to look at how round trips are distributed across the hours of when such rides start.
+
+Absolute numbers:
+
+```{r Number of Round Trips by Hour, message=FALSE, warning=FALSE}
+area_round_trips <- full_tripdata %>% 
+  group_by(hour, member_casual) %>% 
+  summarise(num_round_trip = sum(round_trip, na.rm = TRUE)) %>% 
+  arrange(hour)
+
+ggplot(area_round_trips, aes(x = hour, y = num_round_trip, color = member_casual)) +
+  geom_line() +
+  scale_x_discrete(limits = area_round_trips$hour) +
+  theme_minimal() +
+  scale_y_continuous(labels = comma) +
+  labs(title = "Number of Round Trips by Hour",
+       color = "Customer Type",
+       x = element_blank(),
+       y = element_blank()) +
+  theme(legend.position = "bottom")
+```
+
+Percentages:
+
+```{r Percentage of Round Trips by Start Hour, message=FALSE, warning=FALSE}
+line_round_trips <- full_tripdata %>% 
+  group_by(hour, member_casual) %>% 
+  summarise(num_round_trip = sum(round_trip, na.rm = TRUE), total_trips = n(),
+            ratio = round((num_round_trip / total_trips)*100,2)) %>% 
+  arrange(hour)
+
+ggplot(line_round_trips, aes(x = hour, y = ratio, color = member_casual)) +
+  geom_line() +
+  scale_x_discrete(limits = line_round_trips$hour) +
+  theme_minimal() +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +  # Add % sign to Y-axis labels
+  labs(title = "Percentage of Round Trips by Start Hour",
+       color = "Customer Type",
+       x = element_blank(),
+       y = "") +
+  theme(legend.position = "bottom")
+```
+
+Nothing special here, both groups show the same pattern where the percentage of round trips drops at late-late night and during early commute hours.
+
+After looking at how round trips are distributed across the hours of when they start, the next logical progression is to do this to all rides.
+
+Absolute numbers:
+
+*(How many rides took place at each hour)*
+
+```{r Ride Number Distribution by Ride Start Hour, message=FALSE, warning=FALSE}
+line_ride_count_hour <- full_tripdata %>% 
+  group_by(hour, member_casual) %>% 
+  summarise(ride_count = n()) %>% 
+  arrange(hour)
+
+ggplot(line_ride_count_hour, aes(x = hour, y = ride_count, color = member_casual)) + 
+  geom_line() +
+  scale_x_discrete(limits = line_ride_count_hour$hour) +
+  theme_minimal() +
+  scale_y_continuous(labels = comma) +
+  labs(title = "Ride Number Distribution by Ride Start Hour",
+       color = "Customer Type",
+       x = element_blank(),
+       y = element_blank()) +
+  theme(legend.position = "bottom")
+```
+
+Proportion:
+
+*(Out of all rides for each hour, what is the proportional contribution by members and casuals)*
+
+```{r Ride Number Proportion by Ride Start Hour, message=FALSE, warning=FALSE}
+ggplot(full_tripdata, aes(x = hour, fill = member_casual)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = function(x) paste0(x * 100, "%"), expand = c(0, 0)) +
+  scale_x_discrete(limits = full_tripdata$hour) +
+  labs(x = NULL, y = NULL, title = "Ride Number Proportion by Ride Start Hour") +
+  guides(fill = guide_legend(title = NULL)) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+Percentages:
+
+*(What percentage of total rides is contributed by members and casuals at each hour)*
+
+```{r Ridership Percentage by Hour, message=FALSE, warning=FALSE}
+line_ratio_ride_hour <- full_tripdata %>% 
+  group_by(hour, member_casual) %>% 
+  summarise(ratio_ride_count = n()) %>%  
+  arrange(hour) %>%
+  group_by(member_casual) %>%
+  mutate(total = sum(ratio_ride_count),
+         prop = ratio_ride_count / total * 100)
+
+ggplot(line_ratio_ride_hour, aes(x = hour, y = prop, color = member_casual)) + 
+  geom_line() +
+  scale_x_discrete(limits = line_ratio_ride_hour$hour) +
+  theme_minimal() +
+  scale_y_continuous(labels = comma) +
+  labs(title = "Ridership Percentage by Hour, %",
+       color = "Customer Type",
+       x = element_blank(),
+       y = element_blank()) +
+  theme(legend.position = "bottom")
+```
+
+Both groups have a spike in rides at around 5 PM, which might be a sign of them using bikes to commute from work. However, **members** also have a spike at around 8 AM, whereas casual riders don't have it.
+
+It's possible that **casual** riders don't find bikes a good enough option to commute **to** work. Why? It's a question for further investigation. Yet, this is one more insight.
+
+Now, to get a better grasp of how ridership is distributed duration-wise , I look at a couple more plots. First, ride length distribution per minute intervals:
+
+```{r Ride Length per Minute Intervals, message=FALSE, warning=FALSE}
+trip_length_minutes <- full_tripdata %>% 
+  group_by(ride_length, member_casual) %>% 
+  summarise(num_rides = n(),
+            ride_length_minutes = round(ride_length/60)) %>% 
+  group_by(ride_length_minutes, member_casual) %>% 
+  mutate(total_rides = n())
+
+ggplot(trip_length_minutes, aes(x = ride_length_minutes, y = total_rides,
+                                color = member_casual)) +
+  geom_line() +
+  scale_y_continuous(label = comma) +
+  scale_x_continuous(breaks = seq(1,58,4)) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  labs(title = "Ride Length per Minute Intervals",
+       color = "Customer Type",
+       x = element_blank(),
+       y = element_blank())
+```
+
+Second, ride length histogram with 5-minute bins:
+
+```{r Ride Length Histogram (5-minute bins), message=FALSE, warning=FALSE}
+ggplot(full_tripdata, aes(x = ride_length/60, fill = member_casual)) +
+  geom_histogram(binwidth = 5, color = "black", position = "stack") +
+  scale_x_continuous(limits = c(0, 60), breaks = seq(0, 55, 5)) +
+  scale_y_continuous(label = comma) +
+  theme_minimal() +
+  labs(title = "Ride Length Histogram (5-minute bins)",
+       fill = "Customer Type") +
+  theme(legend.title = element_blank(),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+```
+
+For precise numbers I look at the deciles once again:
+
+```{r deciles(to check precise numbers), message=FALSE, warning=FALSE}
+full_tripdata %>%
+  group_by(member_casual) %>%
+  summarise(
+    `10%` = format(as.POSIXct(0, origin = "1970-01-01") + 
+                     round(quantile(ride_length, probs = 0.1)), format = "%Mm %Ss"),
+    `20%` = format(as.POSIXct(0, origin = "1970-01-01") + 
+                     round(quantile(ride_length, probs = 0.2)), format = "%Mm %Ss"),
+    `30%` = format(as.POSIXct(0, origin = "1970-01-01") + 
+                     round(quantile(ride_length, probs = 0.3)), format = "%Mm %Ss"),
+    `40%` = format(as.POSIXct(0, origin = "1970-01-01") + 
+                     round(quantile(ride_length, probs = 0.4)), format = "%Mm %Ss"),
+    `50%` = format(as.POSIXct(0, origin = "1970-01-01") + 
+                     round(quantile(ride_length, probs = 0.5)), format = "%Mm %Ss"),
+    `60%` = format(as.POSIXct(0, origin = "1970-01-01") + 
+                     round(quantile(ride_length, probs = 0.6)), format = "%Mm %Ss"),
+    `70%` = format(as.POSIXct(0, origin = "1970-01-01") + 
+                     round(quantile(ride_length, probs = 0.7)), format = "%Mm %Ss"),
+    `80%` = format(as.POSIXct(0, origin = "1970-01-01") + 
+                     round(quantile(ride_length, probs = 0.8)), format = "%Mm %Ss"),
+    `90%` = format(as.POSIXct(0, origin = "1970-01-01") + 
+                     round(quantile(ride_length, probs = 0.9)), format = "%Mm %Ss")
+  )
+```
+
+**Casuals**: *50%* of rides are shorter than 12m 15s; *90%*, 32m 45s.
+
+**Members**: *50%* of rides are shorter than 8m 55s; *90%*, 24m 12s.
+
+As for the longer rides, casual riders expectedly have more of them than members, likely because of a Divvy's 45 minutes limit per ride in their annual subscription.
+
+## Bike Type Analysis
+
+Now I want to look at the data in terms of the types of bikes used for rides:
+
+```{r Proportion of Rides by Bike Type and Customer Type, message=FALSE, warning=FALSE}
+bike_type_prop <- full_tripdata %>%
+  group_by(member_casual, rideable_type) %>%
+  summarise(count = n()) %>%
+  mutate(proportion = count / sum(count))
+
+ggplot(bike_type_prop, aes(x = member_casual, y = proportion, fill = rideable_type)) + 
+  theme_minimal() +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = percent(proportion)),
+            position = position_stack(vjust = 0.5),
+            size = 3) +
+  scale_fill_manual(values = c("lightblue", "steelblue")) +
+  scale_y_continuous(breaks = NULL) +
+  labs(y = NULL,
+       x = NULL,
+       fill = "",
+       title = "Proportion of Rides by Bike Type")
+```
+
+This plot shows that **casual** riders prefer electric bikes over classic, whereas **members** slightly prefer classic bikes over electic.
+
+To look at this proportion in dynamics, I applied a monthly facet wrap:
+
+```{r Monthly Proportion of Rides by Bike Type, message=FALSE, warning=FALSE}
+bike_type_prop_month <- full_tripdata %>%
+  group_by(member_casual, rideable_type, month) %>%
+  summarise(count = n()) %>%
+  group_by(month, member_casual) %>%
+  mutate(sum_count = sum(count),
+         proportion = count / sum_count)
+
+ggplot(bike_type_prop_month, aes(x = member_casual, y = proportion, fill = rideable_type)) + 
+  theme_minimal() +
+  geom_bar(stat = "identity", position = "fill") +
+  geom_text(aes(label = percent(proportion, accuracy = 1)),
+            position = position_stack(vjust = 0.5),
+            size = 3) +
+  scale_fill_manual(values = c("lightblue", "steelblue")) +
+  scale_y_continuous(breaks = NULL, labels = scales::percent) +
+  labs(y = NULL,
+       x = NULL,
+       fill = "",
+       title = "Monthly Proportion of Rides by Bike Type") +
+  facet_wrap(~ month,
+             labeller = labeller(month = c("01" = "Jan", "02" = "Feb", "03" = "Mar",
+                                           "04" = "Apr", "05" = "May", "06" = "Jun",
+                                           "07" = "Jul", "08" = "Aug", "09" = "Sep", 
+                                           "10" = "Oct", "11" = "Nov", "12" = "Dec"))) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+Monthly analysis shows that in a **casual** group classic bike popularity is constantly lower than that of electric bikes, except for May and June. Maybe this is due to people trying to lose weight for summer and then giving this idea up; maybe not, there's not enough data to be certain.
+
+In **members** group classic bikes are constantly equally or slightly more popular except for October, November, and December. Intuitively, this is due to the weather situation.
+
+Another interesting story to observe is how bike type popularity is distributed across hours. Here's a plot of classic bike ridership percentage across hours:
+
+*(A percentage value on Y-axis indicates that out of all rides at this hour in this member group, x% of rides were on classic bikes)*
+
+```{r Classic Bike Ridership Percentage by Hour, message=FALSE, warning=FALSE}
+ratio_rideable_hour <- full_tripdata %>% 
+  group_by(hour, member_casual, rideable_type) %>% 
+  summarise(ratio_rideable_hour = n()) %>%  
+  arrange(hour) %>%
+  group_by(member_casual, hour) %>%
+  mutate(total = sum(ratio_rideable_hour),
+         prop = ratio_rideable_hour / total * 100) %>% 
+  filter(rideable_type == "classic_bike")
+
+ggplot(ratio_rideable_hour, aes(x = hour, y = prop, color = member_casual)) + 
+  geom_line() +
+  scale_x_discrete(limits = ratio_rideable_hour$hour) +
+  theme_minimal() +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  labs(title = "Classic Bike Ridership Percentage by Hour",
+       color = "Customer Type",
+       x = element_blank(),
+       y = element_blank()) +
+  theme(legend.title = element_blank(),
+        legend.position = "bottom")
+```
+
+One interesting observation is that the number of rides starts growing at around 4AM, and so does classic bike popularity, and that is true for both customer groups. However, I  can't think of any decent insight based on this observation. *(Maybe riders are tired at night and tend to use electric bikes, or maybe at night they ride from stations where the availability of electric bikes is higher. I'm leaving this question unanswered because it's out of the scope of the current analysis)*
+
+In general, it's evident that **classic bikes are more popular among members than casuals**, which is one more insight. But whether it is due to pricing, availability, or fitness aspect is due to further analysis, which is out of the scope of the data.
+
+# Part 3: Spatial Analysis
+
+The best way to present the data for spatial analysis is to plot it on an actual map, which I will do.
+
+But first, let's have a look at the top 10 start and end stations for both customer groups. *(Rides with missing station IDs and names are filtered out)*
+
+Top 10 start stations:
+
+```{r top 10 start stations, message=FALSE, warning=FALSE}
+full_tripdata %>%
+  filter(!is.na(start_station_name), !is.na(start_station_id)) %>% 
+  group_by(start_station_id, start_station_name, member_casual) %>% 
+  summarise(rides = n()) %>%
+  group_by(start_station_id, start_station_name) %>% 
+  mutate(total_rides_station = sum(rides)) %>% 
+  group_by(start_station_id, start_station_name) %>% 
+  mutate(percentage_of_total_rides_station = round(rides / sum(rides) * 100, 2)) %>% 
+  group_by(member_casual) %>% 
+  mutate(percentage_of_total_rides_by_member_casual = round(rides / sum(rides) * 100, 2)) %>% 
+  arrange(member_casual, desc(rides)) %>% 
+  group_by(member_casual) %>%
+  slice(1:10)
+```
+
+Top 10 end stations:
+
+```{r top 10 end stations, message=FALSE, warning=FALSE}
+full_tripdata %>%
+  filter(!is.na(end_station_name), !is.na(end_station_id)) %>% 
+  group_by(end_station_id, end_station_name, member_casual) %>% 
+  summarise(rides = n()) %>%
+  group_by(end_station_id, end_station_name) %>% 
+  mutate(total_rides_station = sum(rides)) %>% 
+  group_by(end_station_id, end_station_name) %>% 
+  mutate(percentage_of_total_rides_station = round(rides / sum(rides) * 100, 2)) %>% 
+  group_by(member_casual) %>% 
+  mutate(percentage_of_total_rides_by_member_casual = round(rides / sum(rides) * 100, 2)) %>% 
+  arrange(member_casual, desc(rides)) %>% 
+  group_by(member_casual) %>%
+  slice(1:10)
+```
+
+Top start stations are simultaneously top end stations for both groups, but there are strong differences in the top stations for different customer groups. Notably, the most popular station for **casual** riders accounts for more than 2.5% of all casual rides. This station is most likely located at a popular place for leisure.
+
+Now, maps. Since Google Maps require API key to get a map, and Leaflet doesn't have any decent options to plot routes, I use Stamen maps.
+
+## Fetching a Map
+
+I fetch a Chicago map by manually entering coordinates for a boundary box. (*I do it manually to get a better bbox than a default one, and for obvious reasons I spare the boring process of getting those coordinates*)
+
+```{r fetching a map}
+chicago_map <- get_stamenmap(bbox = c(-87.75, 41.78, -87.55, 41.97), 
+                            source = "stamen",
+                            maptype = "toner-lite",
+                            zoom = 12)
+```
+
+## Heatmaps
+
+I created separate tibbles for casual and member heatmaps and filtered out rows with NA values in station names and IDs because (as I explained in Part 1) such rows contain broken coordinates.
+
+```{r Casual rides heatmap tibble, message=FALSE, warning=FALSE}
+# Casual rides heatmap tibble
+full_tripdata_casual <-  full_tripdata %>%
+  filter(!is.na(start_station_name),
+         !is.na(start_station_id),
+         !is.na(end_station_name),
+         !is.na(end_station_id),
+         member_casual == "casual"
+  )
+```
+
+```{r Member rides heatmap tibble, message=FALSE, warning=FALSE}
+# Member rides heatmap tibble
+full_tripdata_member <-  full_tripdata %>%
+  filter(!is.na(start_station_name),
+         !is.na(start_station_id),
+         !is.na(end_station_name),
+         !is.na(end_station_id),
+         member_casual == "member"
+  )
+```
+
+Plotting heatmaps:
+
+```{r casual rides heatmap, message=FALSE, warning=FALSE}
+# casual rides heatmap
+ggmap(chicago_map) +
+  stat_density2d(data=full_tripdata_casual,
+                 aes(x=start_lng, y=start_lat, fill=..level.., alpha= ..level..),
+                 geom="polygon") +
+  scale_fill_gradientn(colours=rev(brewer.pal(7, "Spectral")))
+```
+
+```{r Member rides heatmap, message=FALSE, warning=FALSE}
+# Member rides heatmap
+ggmap(chicago_map) +
+  stat_density2d(data=full_tripdata_member,
+                 aes(x=start_lng, y=start_lat, fill=..level.., alpha= ..level..),
+                 geom="polygon") +
+  scale_fill_gradientn(colours=rev(brewer.pal(7, "Spectral")))
+```
+
+The difference is explicit: **casual** rides start mostly at the harbor area, whereas **member** rides start at busy city areas.
+
+However, heatmaps aren't too informative when researching routes. From heatmaps we know that members and casuals start their rides at different stations, but where do they ride?  
+
+To explore this, I'm plotting routes.
+
+## Routes
+
+I introduce two new tibbles:
+
+```{r top 500 casual routes (tibble), message=FALSE, warning=FALSE}
+# Top 500 Casual Routes
+routes_casual <-  full_tripdata %>%
+  filter(!is.na(start_station_name),
+         !is.na(start_station_id),
+         !is.na(end_station_name),
+         !is.na(end_station_id),
+         member_casual == "casual") %>% 
+  group_by(start_station_id, start_station_name, end_station_id, end_station_name) %>% 
+  summarise( start_lat = median(start_lat),
+             start_lng = median(start_lng),
+             end_lat = median(end_lat),
+             end_lng = median(end_lng),
+             total_rides = n()
+  ) %>% 
+  filter(total_rides > 500) %>% 
+  mutate(start_lat = if_else(start_lat == end_lat, start_lat + 0.00001, start_lat)) %>% 
+  mutate(start_lng = if_else(start_lng == end_lng, start_lng + 0.00001, start_lng))
+```
+
+```{r top 500 member routes (tibble), message=FALSE, warning=FALSE}
+# Top 500 Member Routes
+routes_member <-  full_tripdata %>%
+  filter(!is.na(start_station_name),
+         !is.na(start_station_id),
+         !is.na(end_station_name),
+         !is.na(end_station_id),
+         member_casual == "member") %>% 
+  group_by(start_station_id, start_station_name, end_station_id, end_station_name) %>% 
+  summarise( start_lat = median(start_lat),
+             start_lng = median(start_lng),
+             end_lat = median(end_lat),
+             end_lng = median(end_lng),
+             total_rides = n()
+  ) %>% 
+  filter(total_rides > 500) %>% 
+  mutate(start_lat = if_else(start_lat == end_lat, start_lat + 0.00001, start_lat)) %>% 
+  mutate(start_lng = if_else(start_lng == end_lng, start_lng + 0.00001, start_lng))
+```
+
+Some explanation of what I did:
+
+- I filtered out NA values in station names and IDs because such rows have only double decimal places precision for lat and lng, which can heavily skew the data. Alternatively, I could filter out rows with coordinates that have less than 5 decimal places precision, the result would be the same.
+- I grouped data by station IDs + station names. Grouping by IDs or names alone would be wrong because, as I mentioned above, some stations have the same ID but different names, and are, in fact, different although closely located stations. In simpler words, for the *stations* table the primary key would be a combination of ID and NAME.
+- Original data has coordinates for rides but not for bike stations, and despite rides start and end only at bike stations, coordinates for rides to (or from) the same station differ. Therefore, I assign the median coordinates of all the rides for a station as the coordinates of this station.
+- Filtered out routes with less than 500 rides.
+- Geom_curve function doesn't allow start and end coordinates to be the same, so I would need to exclude round trips in order to make the viz work. I don't want to do it, so I incremented start coordinates for round trips by 0.00001, which won't affect the plot. 
+
+Finally, plotting. 
+
+Top 500 Casual Routes:
+
+```{r Top 500 Casual Routes (plot), message=FALSE, warning=FALSE}
+ggmap(chicago_map) +
+  geom_curve(routes_casual,
+             mapping = aes(x = start_lng, y = start_lat, xend = end_lng, yend = end_lat,
+                           alpha= total_rides, color = total_rides),
+             size = 0.5, curvature = .2,
+             arrow = arrow(length=unit(0.2,"cm"), ends="first", type = "closed")) +
+  coord_cartesian() +
+  labs(title = "Top Routes by Casual Users, 500+ Rides",x=NULL,y=NULL) +
+  theme(legend.position="right")
+```
+
+Top 500 Member Routes:
+
+```{r Top 500 Member Routes (plot), message=FALSE, warning=FALSE}
+ggmap(chicago_map) + 
+  geom_curve(routes_member,
+             mapping = aes(x = start_lng, y = start_lat, xend = end_lng, yend = end_lat,
+                           alpha= total_rides, color = total_rides),
+             size = 0.5, curvature = .2,
+             arrow = arrow(length=unit(0.2,"cm"), ends="first", type = "closed")) +
+  coord_cartesian() +
+  labs(title = "Top Routes by Members, 500+ Rides",x=NULL,y=NULL) +
+  theme(legend.position="right")
+```
+
+There's not a single doubt that **casual** rides are concentrated around places for leisure, namely Chicago Harbor, and **member** rides are concentrated around the busy city areas.
+
+Let's break the data down by the bike type. To make the data easier to follow, I create separate plots for members and for casuals. Since plots are also separate for classic and electric bikes, I lower the cap for a route to be considered popular to 250 rides.
+
+Casuals:
+
+```{r Casual Top Routes Classic Bike (tibble), message=FALSE, warning=FALSE}
+# Casual Top Routes Classic Bike (250+ rides)
+routes_casual_classic <-  full_tripdata %>%
+  filter(!is.na(start_station_name),
+         !is.na(start_station_id),
+         !is.na(end_station_name),
+         !is.na(end_station_id),
+         member_casual == "casual",
+         rideable_type == "classic_bike") %>% 
+  group_by(start_station_id, start_station_name, end_station_id, end_station_name) %>% 
+  summarise( start_lat = median(start_lat),
+             start_lng = median(start_lng),
+             end_lat = median(end_lat),
+             end_lng = median(end_lng),
+             total_rides = n()
+  ) %>% 
+  filter(total_rides > 250) %>% 
+  mutate(start_lat = if_else(start_lat == end_lat, start_lat + 0.00001, start_lat)) %>% 
+  mutate(start_lng = if_else(start_lng == end_lng, start_lng + 0.00001, start_lng))
+```
+
+```{r Casual Top Routes Electric Bike (tibble), message=FALSE, warning=FALSE}
+# Casual Top Routes Electric Bike (250+ rides)
+routes_casual_electric <-  full_tripdata %>%
+  filter(!is.na(start_station_name),
+         !is.na(start_station_id),
+         !is.na(end_station_name),
+         !is.na(end_station_id),
+         member_casual == "casual",
+         rideable_type == "electric_bike") %>% 
+  group_by(start_station_id, start_station_name, end_station_id, end_station_name) %>% 
+  summarise( start_lat = median(start_lat),
+             start_lng = median(start_lng),
+             end_lat = median(end_lat),
+             end_lng = median(end_lng),
+             total_rides = n()
+  ) %>% 
+  filter(total_rides > 250) %>% 
+  mutate(start_lat = if_else(start_lat == end_lat, start_lat + 0.00001, start_lat)) %>% 
+  mutate(start_lng = if_else(start_lng == end_lng, start_lng + 0.00001, start_lng))
+```
+
+```{r Casual Top Routes Classic Bike (plot), message=FALSE, warning=FALSE}
+ggmap(chicago_map) +
+  geom_curve(routes_casual_classic,
+             mapping = aes(x = start_lng, y = start_lat, xend = end_lng, yend = end_lat,
+                           alpha= total_rides, color = total_rides),
+             size = 0.5, curvature = .2,
+             arrow = arrow(length=unit(0.2,"cm"), ends="first", type = "closed")) +
+  coord_cartesian() +
+  labs(title = "Top Routes by Casuals, Classic Bike, 250+ Rides",x=NULL,y=NULL) +
+  theme(legend.position="right")
+```
+
+```{r Casual Top Routes Electric Bike (plot), message=FALSE, warning=FALSE}
+ggmap(chicago_map) +
+  geom_curve(routes_casual_electric,
+             mapping = aes(x = start_lng, y = start_lat, xend = end_lng, yend = end_lat,
+                           alpha= total_rides, color = total_rides),
+             size = 0.5, curvature = .2,
+             arrow = arrow(length=unit(0.2,"cm"), ends="first", type = "closed")) +
+  coord_cartesian() +
+  labs(title = "Top Routes by Casuals, Electric Bike, 250+ Rides",x=NULL,y=NULL) +
+  theme(legend.position="right")
+```
+
+Interesting observation: casual riders on classic bikes take more one-way trips, whereas on electric bikes they take more round trips (light blue arrow without a tail at the harbor).
+
+Members:
+
+```{r Member Top Routes Classic Bike (tibble), message=FALSE, warning=FALSE}
+# Member Top Routes Classic Bike (250+ rides)
+routes_member_classic <-  full_tripdata %>%
+  filter(!is.na(start_station_name),
+         !is.na(start_station_id),
+         !is.na(end_station_name),
+         !is.na(end_station_id),
+         member_casual == "member",
+         rideable_type == "classic_bike") %>% 
+  group_by(start_station_id, start_station_name, end_station_id, end_station_name) %>% 
+  summarise( start_lat = median(start_lat),
+             start_lng = median(start_lng),
+             end_lat = median(end_lat),
+             end_lng = median(end_lng),
+             total_rides = n()
+  ) %>% 
+  filter(total_rides > 250) %>% 
+  mutate(start_lat = if_else(start_lat == end_lat, start_lat + 0.00001, start_lat)) %>% 
+  mutate(start_lng = if_else(start_lng == end_lng, start_lng + 0.00001, start_lng))
+```
+
+```{r Member Top Routes Electric Bike (tibble), message=FALSE, warning=FALSE}
+# Member Top Routes Electric Bike (250+ rides)
+routes_member_electric <-  full_tripdata %>%
+  filter(!is.na(start_station_name),
+         !is.na(start_station_id),
+         !is.na(end_station_name),
+         !is.na(end_station_id),
+         member_casual == "member",
+         rideable_type == "electric_bike") %>% 
+  group_by(start_station_id, start_station_name, end_station_id, end_station_name) %>% 
+  summarise( start_lat = median(start_lat),
+             start_lng = median(start_lng),
+             end_lat = median(end_lat),
+             end_lng = median(end_lng),
+             total_rides = n()
+  ) %>% 
+  filter(total_rides > 250) %>% 
+  mutate(start_lat = if_else(start_lat == end_lat, start_lat + 0.00001, start_lat)) %>% 
+  mutate(start_lng = if_else(start_lng == end_lng, start_lng + 0.00001, start_lng))
+```
+
+```{r Member Top Routes Classic Bike (plot), message=FALSE, warning=FALSE}
+ggmap(chicago_map) +
+  geom_curve(routes_member_classic,
+             mapping = aes(x = start_lng, y = start_lat, xend = end_lng, yend = end_lat,
+                           alpha= total_rides, color = total_rides),
+             size = 0.5, curvature = .2,
+             arrow = arrow(length=unit(0.2,"cm"), ends="first", type = "closed")) +
+  coord_cartesian() +
+  labs(title = "Top Routes by Members, Classic Bike, 250+ Rides",x=NULL,y=NULL) +
+  theme(legend.position="right")
+```
+
+```{r Member Top Routes Electric Bike (plot), message=FALSE, warning=FALSE}
+ ggmap(chicago_map) +
+  geom_curve(routes_member_electric,
+             mapping = aes(x = start_lng, y = start_lat, xend = end_lng, yend = end_lat,
+                           alpha= total_rides, color = total_rides),
+             size = 0.5, curvature = .2,
+             arrow = arrow(length=unit(0.2,"cm"), ends="first", type = "closed")) +
+  coord_cartesian() +
+  labs(title = "Top Routes by Members, Electric Bike, 250+ Rides",x=NULL,y=NULL) +
+  theme(legend.position="right")
+```
+
+Looks like the Harbor area is not popular in members on electric bikes. Also, members mostly use electric bikes to commute short distances at a small number of busy city areas, whereas they use classic bikes to commute all over Chicago, including longer rides from distant areas.
+
+# Summary
+
+There are evident differences in how casual riders and annual members use bikes differently:
+
+1. Casual customers take longer rides.
+
+ + **Casuals**: *Mean ride* is *15.7* minutes. *50%* of rides are shorter than *12m 15s*; 90%, *32m 45s*.
+
+ + **Members**: *Mean ride* is *11.7* minutes. *50%* of rides are shorter than *8m 55s*; 90%, *24m 12s*.
+
+2. **Casual** ridership increases during weekends, **member** ridership decreases.
+
+3. Casual customers make more round trips. Percentage of round trips: 5.2% for **casuals**, 2% for **members**.
+
+4. Both groups seem to use bikes to commute *from* work, but **casual** riders don't seem to actively use bikes to commute *to* work.
+
+5. **Casual** customers prefer electric bikes, **members** slightly prefer classic bikes.
+
+ + **Casuals**: *55.7%* of rides were on electric bikes; classic — *44.3%*.
+
+ + **Members**: *48.6%* of rides were on electric bikes; classic — *51.4%*.
+
+6. Most popular routes for **casual** users start near harbor area, and also end at (or close to) harbor area. The second most popular group of routes follows along the shore towards Lincoln Park. Only a small fraction of rides are in busy city areas. Conversely, most popular routes for **members** are in busy city areas, with only a minuscule fraction or rides leading to the harbor.
+
+It's safe to say that casual customers prefer weekends and ride mostly for leisure, whereas members mostly use bikes to commute. Member ridership is more consistent throughout the year, whereas casual ridership has a sharp increase during May to October.
+
+# Recommendations
+
+1. **Create additional benefits for hesitant casual customers**. A hesitant casual customer might be one whose ridership pattern resembles that of a member. *Top Routes by Casuals, Classic Bike, 250+ Rides* plot shows there's such a group of casual customers. Think of ways to target them.
+
+2. **Lure casual customers into trying bikes as means of day-to-day transportation.** Identify casual customers who use bikes quite regularly and create a marketing campaign to target them. Think of a powerful message for this group; e.g. connect riding a bike with health benefits, which results in the overall improved quality of life (stress reduction, weight loss, improved mood, saving money on medicine and so on).
+
+*Actually, such a campaign could be effective on a larger scale, but trying it on a small relevant group first would be more efficient in terms of using the budget.*
+
+3. **Focus on the leisure aspect**. This recommendation somewhat resembles the second one, but here the focus is not on trying to lure casual customers into commuting, but to nudge them into taking more leisure rides. The message should also focus on connecting riding a bike with improving the quality of life; however, the target group could differ.
+
+Speaking of the target groups, for the second recommendation the target group could be those who use bikes for leisure AND sometimes use bikes to commute. For the third recommendation, the group could be those who use bikes for leisure BUT don't use them to commute. Of course, "sometimes" and "don't use" should be defined in numbers, it's not necessarily that "don't use" = 0 and "sometimes" is anything > 1. And, of course, there should be multiple groups for each recommendation for the A/B testing. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
