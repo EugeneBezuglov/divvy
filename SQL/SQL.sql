@@ -1,3 +1,5 @@
+-- This SQL project is part of the bigger project, Divvy, that is available in the Divvy folder.
+
 -- Here is all the SQL code for this project in the right order
 
 -- Create 12 tables, one for each month of data.
