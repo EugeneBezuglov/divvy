@@ -563,3 +563,147 @@ SET round_trip =
 -- A good idea would be to create a new table, stations, which would hold station id, name, and coordinates.
 -- I could obtain station coordinates by calculating median latitute and longitude of all the station rides.
 -- I've already done this in R, maybe I'll do it in SQL, maybe not. 
+
+-- So, I did it.
+
+-- CREATE TABLE stations that stores all the stations with their coordinates.
+CREATE TABLE stations AS
+-- first, I fetch all distinct combination of station_id + station_name from full_tripdata table
+WITH fetch_station_id_name AS 
+(
+	SELECT 
+		start_station_id AS station_id,
+		start_station_name AS station_name
+	FROM full_tripdata
+	GROUP BY
+		start_station_id,
+		start_station_name
+	UNION
+	SELECT 
+		end_station_id AS station_id,
+		end_station_name AS station_name
+	FROM full_tripdata
+	GROUP BY
+		end_station_id,
+		end_station_name
+),
+/* 
+Next, I fetch median coordinates of these stations. I fetch two sets of median coordinates—from start
+stations and from end stations. Next, I group the values by station_id and station_name. In most cases, 
+median coordinates fetched from start stations and from end stations are the same; however, in some 
+cases they differ, so in the next step I aggregate them by calculating their AVG value.
+*/
+fetched_coords AS
+(
+	SELECT 
+		station_id,
+		station_name,
+		PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY start_lat) AS lat,
+		PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY start_lng) AS lng
+	FROM fetch_station_id_name fe INNER JOIN full_tripdata fu
+		ON fe.station_id = fu.start_station_id
+		AND fe.station_name = fu.start_station_name
+	GROUP BY
+		station_id,
+		station_name
+	UNION
+	SELECT 
+		station_id,
+		station_name,
+		PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY end_lat) AS lat,
+		PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY end_lng) AS lng
+	FROM fetch_station_id_name fe INNER JOIN full_tripdata fu
+		ON fe.station_id = fu.end_station_id
+		AND fe.station_name = fu.end_station_name
+	GROUP BY
+		station_id,
+		station_name
+)
+-- Aggregate median coordinates fetched from start stations and end stations by taking their mean value
+SELECT
+	station_id,
+	station_name,
+	AVG(lat) AS lat,
+	AVG(lng) AS lng
+FROM fetched_coords
+GROUP BY
+	station_id,
+	station_name
+
+-- If I didn't aggregate coordinates, I would have multiple sets of coordinates for the same station.
+-- To me, this is the most accurate way to fetch station coordinates from the data I have.
+
+-- Create a back up
+CREATE TABLE stations_backup AS
+SELECT * FROM stations;
+
+-- A reminder for myself. The code above runs forever (~10 minutes). Think of how this code could be optimized.
+
+-- Now, when I have `stations` table, I could fetch most popular routes.
+
+
+-- Fetch top X routes from full_tripdata
+
+-- First I create `numbered` CTE, where I fetch groups of start+end stations (routes) for each member_casual,
+-- and arrange them descendingly by the number of rides. 
+-- I add ROW_NUMBER() that helps me fetch the desired X of routes.
+WITH numbered AS (
+
+SELECT
+	start_station_id,
+	start_station_name,
+	end_station_id,
+	end_station_name,
+	member_casual,
+	COUNT(*) as n_rides,
+	ROW_NUMBER() OVER(PARTITION BY member_casual ORDER BY COUNT(*) DESC) AS row_n
+FROM
+	full_tripdata
+WHERE
+	start_station_id IS NOT NULL
+	AND start_station_name IS NOT NULL
+	AND end_station_id IS NOT NULL
+	AND end_station_name IS NOT NULL
+GROUP BY
+	start_station_id,
+	start_station_name,
+	end_station_id,
+	end_station_name,
+	member_casual
+ORDER BY
+	member_casual,
+	n_rides DESC
+
+)
+
+-- Now I join my CTE with `stations` table, where I store station coordinates, and select everything I need.
+
+SELECT
+	start_station_id,
+	start_station_name,
+	end_station_id,
+	end_station_name,
+	member_casual,
+	n_rides,
+	s.lat AS start_lat,
+	s.lng AS start_lng,
+	se.lat AS end_lat,
+	se.lng AS end_lng
+FROM
+	numbered n
+	FULL JOIN stations s
+	ON n.start_station_id = s.station_id
+	AND n.start_station_name = s.station_name
+	FULL JOIN stations se
+	ON n.end_station_id = se.station_id
+	AND n.end_station_name = se.station_name
+WHERE
+	row_n <= 100
+	
+/*
+
+I can alter conditions in the WHERE clause based on what I need. For instance, I can filter my output
+based on the number of rides instead of making it top X routes. The data is ready to be downloaded
+and imported in my Tableau Public.
+
+*/
